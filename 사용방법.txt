@@ -1,0 +1,14 @@
+# 1. cmd로 프로젝트 폴더로 이동
+cd osint-demo
+
+# 2. 의존성 설치
+pip install -r requirements.txt
+
+# 3. API 키 설정
+export OPENAI_API_KEY=sk-...
+
+# 4. 서버 실행
+uvicorn main:app --reload
+
+# 5. 브라우저에서 열기
+http://localhost:8000

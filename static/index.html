@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSINT DEMO — 개인정보 노출 진단</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+KR:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0c0f;
+  --bg2: #111418;
+  --bg3: #1a1f26;
+  --border: #2a3040;
+  --text: #c8d0dc;
+  --text2: #6b7a90;
+  --accent: #00e5a0;
+  --accent2: #00b37a;
+  --warn: #ff6b35;
+  --danger: #ff3355;
+  --low: #4da6ff;
+  --mid: #ffcc44;
+  --high: #ff6b35;
+  --critical: #ff3355;
+  --mono: 'JetBrains Mono', monospace;
+  --sans: 'Noto Sans KR', sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 스캔라인 오버레이 */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    rgba(0,229,160,0.015) 2px, rgba(0,229,160,0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 1000;
+}
+
+header {
+  border-bottom: 1px solid var(--border);
+  padding: 20px 40px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.logo-dot {
+  width: 10px; height: 10px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--accent);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+header h1 {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+header span {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  letter-spacing: 0.1em;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  flex: 1;
+  gap: 0;
+}
+
+/* ── 좌측 입력 패널 ── */
+.panel-left {
+  border-right: 1px solid var(--border);
+  padding: 32px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.section-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  letter-spacing: 0.05em;
+}
+
+.field input {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.field input:focus {
+  border-color: var(--accent2);
+  box-shadow: 0 0 0 2px rgba(0,229,160,0.1);
+}
+.field input::placeholder { color: #3a4455; }
+
+.hint {
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.5;
+}
+
+.btn-run {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 14px;
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.15s, transform 0.1s;
+  margin-top: 8px;
+}
+.btn-run:hover { background: var(--accent2); }
+.btn-run:active { transform: scale(0.98); }
+.btn-run:disabled { background: #1e2a22; color: #3a5040; cursor: not-allowed; }
+
+.warning-box {
+  background: rgba(255,51,85,0.06);
+  border: 1px solid rgba(255,51,85,0.25);
+  border-radius: 4px;
+  padding: 14px;
+  font-size: 12px;
+  color: #ff8099;
+  line-height: 1.6;
+}
+
+/* ── 우측 결과 패널 ── */
+.panel-right {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.result-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+}
+.tab {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--text2);
+  padding: 14px 16px 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tab.active { color: var(--accent); border-color: var(--accent); }
+.tab:hover:not(.active) { color: var(--text); }
+
+.tab-content { display: none; flex: 1; overflow-y: auto; padding: 24px; }
+.tab-content.active { display: block; }
+
+/* 터미널 로그 */
+.log-area {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 2;
+  color: var(--text2);
+}
+.log-entry { display: flex; gap: 10px; }
+.log-ts { color: #2a3a30; min-width: 60px; }
+.log-msg { color: var(--text); }
+.log-msg.accent { color: var(--accent); }
+.log-msg.warn { color: var(--warn); }
+.log-msg.err { color: var(--danger); }
+
+/* 커서 블링크 */
+.cursor {
+  display: inline-block;
+  width: 8px; height: 14px;
+  background: var(--accent);
+  vertical-align: middle;
+  animation: blink 1s step-end infinite;
+  margin-left: 4px;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* 프로필 카드 */
+.profile-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.profile-card h3 {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}
+.profile-row {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(42,48,64,0.5);
+  font-size: 13px;
+}
+.profile-row:last-child { border: none; }
+.profile-key {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  min-width: 100px;
+}
+.profile-val { color: var(--text); }
+
+/* 수집된 사실 */
+.fact-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  gap: 8px;
+  align-items: start;
+  animation: fadeIn 0.3s ease;
+}
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+.fact-field {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  padding-top: 1px;
+}
+.fact-value { font-size: 13px; line-height: 1.5; }
+.badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 3px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+.badge-HIGH { background: rgba(255,107,53,0.15); color: var(--high); }
+.badge-MEDIUM { background: rgba(255,204,68,0.12); color: var(--mid); }
+.badge-LOW { background: rgba(77,166,255,0.12); color: var(--low); }
+.fact-source {
+  grid-column: 2 / 4;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text2);
+  word-break: break-all;
+}
+
+/* 최종 보고서 */
+.report-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.exposure-badge {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 8px 18px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.exposure-CRITICAL { background: rgba(255,51,85,0.15); color: var(--critical); border: 1px solid rgba(255,51,85,0.3); }
+.exposure-HIGH { background: rgba(255,107,53,0.12); color: var(--high); border: 1px solid rgba(255,107,53,0.25); }
+.exposure-MEDIUM { background: rgba(255,204,68,0.1); color: var(--mid); border: 1px solid rgba(255,204,68,0.2); }
+.exposure-LOW { background: rgba(77,166,255,0.1); color: var(--low); border: 1px solid rgba(77,166,255,0.2); }
+
+.report-summary {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.7;
+  margin-bottom: 24px;
+}
+
+.finding-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+.finding-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.finding-category {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--accent2);
+  text-transform: uppercase;
+}
+.finding-content { font-size: 13px; line-height: 1.6; }
+.finding-source {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text2);
+  margin-top: 6px;
+  word-break: break-all;
+}
+
+.warnings-section { margin-top: 24px; }
+.warnings-section h3 {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--danger);
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+.warn-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255,51,85,0.05);
+  border-left: 2px solid var(--danger);
+  margin-bottom: 8px;
+  border-radius: 0 4px 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* 빈 상태 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  color: var(--text2);
+  font-family: var(--mono);
+  font-size: 12px;
+  gap: 10px;
+}
+.empty-state::before {
+  content: '[ NO DATA ]';
+  font-size: 18px;
+  letter-spacing: 0.2em;
+  color: var(--border);
+}
+
+/* 스크롤바 */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-dot"></div>
+  <h1>OSINT DEMO</h1>
+  <span>// 개인정보 노출 진단 시스템 v1.0</span>
+</header>
+
+<div class="layout">
+
+  <!-- 좌측: 입력 -->
+  <div class="panel-left">
+    <div>
+      <div class="section-label">target information</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="field">
+          <label>이름 *</label>
+          <input id="f-name" type="text" placeholder="홍길동">
+        </div>
+        <div class="field">
+          <label>거주 지역</label>
+          <input id="f-location" type="text" placeholder="서울 강남구">
+        </div>
+        <div class="field">
+          <label>SNS ID</label>
+          <input id="f-sns" type="text" placeholder="@honggildong, github.com/hong">
+          <span class="hint">쉼표로 구분</span>
+        </div>
+        <div class="field">
+          <label>직업 / 소속</label>
+          <input id="f-job" type="text" placeholder="백엔드 개발자, 삼성전자">
+        </div>
+        <div class="field">
+          <label>취미</label>
+          <input id="f-hobbies" type="text" placeholder="등산, 보드게임, 사진">
+          <span class="hint">쉼표로 구분</span>
+        </div>
+        <div class="field">
+          <label>나이대</label>
+          <input id="f-age" type="text" placeholder="30대">
+        </div>
+      </div>
+    </div>
+
+    <div class="warning-box">
+      ⚠ 이 도구는 <strong>보안 교육 목적</strong>으로만 사용하세요.<br>
+      본인 또는 동의한 대상만 분석하세요.<br>
+      수집된 정보는 로컬에서만 처리됩니다.
+    </div>
+
+    <button class="btn-run" id="btn-run" onclick="startScan()">
+      ▶ 스캔 시작
+    </button>
+  </div>
+
+  <!-- 우측: 결과 -->
+  <div class="panel-right">
+    <div class="result-tabs">
+      <div class="tab active" onclick="switchTab('log')">로그</div>
+      <div class="tab" onclick="switchTab('debug')">디버그 / LLM 로그</div>
+      <div class="tab" onclick="switchTab('profile')">프로필</div>
+      <div class="tab" onclick="switchTab('facts')">수집 정보 (<span id="facts-count">0</span>)</div>
+      <div class="tab" onclick="switchTab('network')">인간관계 (<span id="assoc-count">0</span>)</div>
+      <div class="tab" onclick="switchTab('report')">최종 보고서</div>
+    </div>
+
+    <!-- 로그 탭 -->
+    <div class="tab-content active" id="tab-log">
+      <div class="log-area" id="log-area">
+        <div class="empty-state" id="log-empty">분석을 시작하면 로그가 출력됩니다</div>
+      </div>
+    </div>
+
+    <!-- 디버그/LLM 로그 탭 -->
+    <div class="tab-content" id="tab-debug">
+      <div style="font-family:monospace;font-size:12px;overflow-y:auto;height:100%;padding:16px;">
+        <div id="debug-area" style="color:var(--text2);line-height:1.8;">
+          <div style="color:var(--text2);padding:20px;text-align:center;">LLM 및 검색 로그가 여기에 표시됩니다</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 프로필 탭 -->
+    <div class="tab-content" id="tab-profile">
+      <div id="profile-area">
+        <div class="empty-state">프로필이 생성되면 여기에 표시됩니다</div>
+      </div>
+    </div>
+
+    <!-- 수집 정보 탭 -->
+    <div class="tab-content" id="tab-facts">
+      <div id="facts-area">
+        <div class="empty-state">수집된 정보가 여기에 표시됩니다</div>
+      </div>
+    </div>
+
+    <!-- 인간관계 탭 -->
+    <div class="tab-content" id="tab-network">
+      <div id="network-area">
+        <div class="empty-state">발견된 지인/인간관계가 여기에 표시됩니다</div>
+      </div>
+    </div>
+
+    <!-- 최종 보고서 탭 -->
+    <div class="tab-content" id="tab-report">
+      <div id="report-area">
+        <div class="empty-state">분석 완료 후 보고서가 생성됩니다</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let factsCount = 0;
+let cursorEl = null;
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    const names = ['log','debug','profile','facts','network','report'];
+    t.classList.toggle('active', names[i] === name);
+  });
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+function ts() {
+  return new Date().toLocaleTimeString('ko-KR', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+
+function addLog(msg, cls = '') {
+  const area = document.getElementById('log-area');
+  const empty = document.getElementById('log-empty');
+  if (empty) empty.remove();
+  if (cursorEl) cursorEl.remove();
+
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-ts">${ts()}</span><span class="log-msg ${cls}">${msg}</span>`;
+  area.appendChild(entry);
+
+  cursorEl = document.createElement('span');
+  cursorEl.className = 'cursor';
+  area.appendChild(cursorEl);
+  area.scrollTop = area.scrollHeight;
+}
+
+function renderProfile(profile) {
+  const area = document.getElementById('profile-area');
+  const labelMap = {
+    name:'이름', location:'거주지', job:'직업', sns_handles:'SNS',
+    hobbies:'취미', age_range:'나이대', extra:'기타', employer:'직장'
+  };
+  let rows = '';
+  for (const [k, v] of Object.entries(profile)) {
+    if (!v || (Array.isArray(v) && v.length === 0)) continue;
+    const label = labelMap[k] || k;
+    const val = Array.isArray(v) ? v.join(', ') : (typeof v === 'object' ? JSON.stringify(v) : v);
+    rows += `<div class="profile-row">
+      <span class="profile-key">${label}</span>
+      <span class="profile-val">${val}</span>
+    </div>`;
+  }
+  area.innerHTML = `<div class="profile-card">
+    <h3>초기 프로필</h3>${rows}
+  </div>`;
+}
+
+function renderFacts(facts, iteration) {
+  const area = document.getElementById('facts-area');
+  if (area.querySelector('.empty-state')) area.innerHTML = '';
+
+  facts.forEach(f => {
+    factsCount++;
+    document.getElementById('facts-count').textContent = factsCount;
+    const card = document.createElement('div');
+    card.className = 'fact-card';
+    card.innerHTML = `
+      <span class="fact-field">${f.field || ''}</span>
+      <span class="fact-value">${Array.isArray(f.value) ? f.value.join(', ') : (f.value || '')}</span>
+      <span class="badge badge-${f.verdict || 'LOW'}">${f.verdict || 'LOW'}</span>
+      ${f.source_url ? `<span class="fact-source">↳ ${f.source_url}</span>` : ''}
+    `;
+    area.appendChild(card);
+  });
+}
+
+function renderNetwork(associates) {
+  const area = document.getElementById('network-area');
+  document.getElementById('assoc-count').textContent = associates.length;
+  if (!associates.length) {
+    area.innerHTML = '<div class="empty-state">발견된 지인이 없습니다</div>';
+    return;
+  }
+  area.innerHTML = associates.map(a => `
+    <div class="fact-card" style="grid-template-columns:1fr auto;">
+      <div>
+        <div style="font-size:14px;color:var(--text);">${a.name || ''}</div>
+        ${a.relation ? `<div style="font-family:monospace;font-size:11px;color:var(--text2);margin-top:2px;">관계: ${a.relation}</div>` : ''}
+        ${a.source_url ? `<div class="fact-source" style="margin-top:4px;">↳ ${a.source_url}</div>` : ''}
+      </div>
+      <span class="badge badge-MEDIUM">지인</span>
+    </div>
+  `).join('');
+}
+
+function renderReport(report, profile) {
+  const area = document.getElementById('report-area');
+
+  if (!report) {
+    area.innerHTML = '<div class="empty-state">보고서 생성 실패 (데이터 없음)</div>';
+    switchTab('report');
+    return;
+  }
+
+  const lvl = report.exposure_level || 'LOW';
+  const summary = report.summary || '';
+  const reason = report.exposure_reason || '';
+  const findings = report.findings || [];
+  const assoc = report.associates || [];
+  const warnings = report.security_warnings || [];
+
+  // findings를 HIGH/MEDIUM으로 분리
+  const highFindings = findings.filter(f => f.confidence === 'HIGH');
+  const mediumFindings = findings.filter(f => f.confidence === 'MEDIUM');
+
+  function renderFindingCard(f) {
+    return `
+      <div class="finding-card">
+        <div class="finding-meta">
+          <span class="finding-category">${f.category || '기타'}</span>
+          <span class="badge badge-${f.confidence || 'LOW'}">${f.confidence || 'LOW'}</span>
+        </div>
+        <div class="finding-content">${f.content || ''}</div>
+        ${f.source_url ? `<div class="finding-source">↳ ${f.source_url}</div>` : ''}
+      </div>
+    `;
+  }
+
+  let html = `
+    <div class="report-header">
+      <span class="exposure-badge exposure-${lvl}">노출도: ${lvl}</span>
+      <span style="font-size:13px;color:var(--text2)">${reason}</span>
+    </div>
+    <div class="report-summary">${summary || '요약 정보 없음'}</div>
+  `;
+
+  if (highFindings.length) {
+    html += `<div class="section-label" style="margin-top:24px;">HIGH 신뢰도 발견 (${highFindings.length})</div>`;
+    html += highFindings.map(renderFindingCard).join('');
+  }
+
+  if (mediumFindings.length) {
+    html += `<div class="section-label" style="margin-top:24px;">MEDIUM 신뢰도 발견 (${mediumFindings.length})</div>`;
+    html += mediumFindings.map(renderFindingCard).join('');
+  }
+
+  if (!highFindings.length && !mediumFindings.length) {
+    html += `<div style="padding:16px;color:var(--text2);font-size:13px;text-align:center;">발견된 정보 없음</div>`;
+  }
+
+  if (assoc.length) {
+    html += `<div class="section-label" style="margin-top:24px;">발견된 인간관계 (${assoc.length})</div>`;
+    html += assoc.map(a => `
+      <div class="finding-card">
+        <div class="finding-content">${a.name || ''}${a.relation ? ` <span style="color:var(--text2);font-size:12px;">(${a.relation})</span>` : ''}</div>
+        ${a.source_url ? `<div class="finding-source">↳ ${a.source_url}</div>` : ''}
+      </div>
+    `).join('');
+  }
+
+  if (warnings.length) {
+    html += `
+      <div class="warnings-section">
+        <h3>보안 경고</h3>
+        ${warnings.map(w => `<div class="warn-item">⚡ ${w}</div>`).join('')}
+      </div>
+    `;
+  }
+
+  area.innerHTML = html;
+  switchTab('report');
+}
+
+async function startScan() {
+  const name = document.getElementById('f-name').value.trim();
+  if (!name) { alert('이름을 입력하세요.'); return; }
+
+  // 초기화
+  factsCount = 0;
+  document.getElementById('facts-count').textContent = '0';
+  document.getElementById('log-area').innerHTML = '<div id="log-empty"></div>';
+  document.getElementById('debug-area').innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center;">LLM 및 검색 로그 수집 중...</div>';
+  document.getElementById('profile-area').innerHTML = '<div class="empty-state">생성 중...</div>';
+  document.getElementById('facts-area').innerHTML = '<div class="empty-state">수집 대기 중...</div>';
+  document.getElementById('network-area').innerHTML = '<div class="empty-state">지인 탐색 대기 중...</div>';
+  document.getElementById('assoc-count').textContent = '0';
+  document.getElementById('report-area').innerHTML = '<div class="empty-state">분석 완료 후 표시됩니다</div>';
+  cursorEl = null;
+  switchTab('log');
+
+  const btn = document.getElementById('btn-run');
+  btn.disabled = true;
+  btn.textContent = '⏳ 스캔 중...';
+
+  addLog('OSINT 파이프라인 시작', 'accent');
+
+  const payload = {
+    name,
+    location: document.getElementById('f-location').value,
+    sns_handles: document.getElementById('f-sns').value,
+    job: document.getElementById('f-job').value,
+    hobbies: document.getElementById('f-hobbies').value,
+    age_range: document.getElementById('f-age').value,
+  };
+
+  try {
+    const res = await fetch('/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+
+      for (const part of parts) {
+        const lines = part.trim().split('\n');
+        let event = '', data = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) event = line.slice(7);
+          if (line.startsWith('data: ')) data = line.slice(6);
+        }
+        if (!event || !data) continue;
+        let parsed;
+        try { parsed = JSON.parse(data); } catch { continue; }
+
+        if (event === 'step') {
+          addLog(parsed.message);
+        } else if (event === 'log') {
+          // LLM/검색 로그를 디버그 탭에 표시
+          const debugArea = document.getElementById('debug-area');
+          if (debugArea.querySelector('div[style*="text-align"]')) {
+            debugArea.innerHTML = '';
+          }
+          const logEl = document.createElement('div');
+          logEl.style.cssText = 'margin-bottom:16px;padding:12px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;';
+          const label = parsed.label || parsed.type;
+          const color = parsed.type === 'llm' ? 'var(--accent)' : 'var(--low)';
+          logEl.innerHTML = `
+            <div style="color:${color};font-weight:600;margin-bottom:6px;">${label}</div>
+            <pre style="margin:0;color:var(--text2);font-size:11px;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto;">${JSON.stringify(parsed.data, null, 2)}</pre>
+          `;
+          debugArea.appendChild(logEl);
+          debugArea.scrollTop = debugArea.scrollHeight;
+        } else if (event === 'profile') {
+          renderProfile(parsed.profile);
+        } else if (event === 'facts') {
+          renderFacts(parsed.facts, parsed.iteration);
+          addLog(`  → ${parsed.facts.length}건 새 정보 수집`, 'accent');
+        } else if (event === 'associates') {
+          renderNetwork(parsed.associates);
+          addLog(`  → 지인 ${parsed.associates.length}명 발견`, 'accent');
+        } else if (event === 'report') {
+          renderReport(parsed.report, parsed.profile);
+          addLog('✅ 최종 보고서 생성 완료', 'accent');
+        } else if (event === 'done') {
+          addLog('─── 분석 완료 ───', 'accent');
+          if (cursorEl) cursorEl.remove();
+        } else if (event === 'error') {
+          addLog('ERROR: ' + parsed.message, 'err');
+        }
+      }
+    }
+  } catch (e) {
+    addLog('연결 오류: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ 스캔 시작';
+  }
+}
+</script>
+</body>
+</html>
