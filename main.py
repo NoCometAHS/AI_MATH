@@ -5,10 +5,14 @@ from typing import AsyncGenerator
 
 import openai
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from fastapi.middleware.cors import CORSMiddleware
+from models import MergeRequest, MergeResponse
+from ai_service import run_validation_and_merge
 
 from prompts import (
     build_filter_prompt,
@@ -312,3 +316,39 @@ async def run(user_input: UserInput):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+app = FastAPI(title="정답 데이터 병합 API")
+
+# 프론트엔드 연동을 위한 CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 데이터 병합 API 엔드포인트
+@app.post("/api/merge_data", response_model=MergeResponse)
+async def api_merge_data(request: MergeRequest):
+    try:
+        # 1. ai_service에 데이터 전달하여 분석 수행
+        ai_result = run_validation_and_merge(
+            ground_truth=request.ground_truth,
+            inferred_data=request.inferred_data
+        )
+        
+        # 2. 최종 정답 데이터셋 합성 (기존 정답 + 새로 검증된 데이터)
+        verified = ai_result.get("verified_data", {})
+        final_ground_truth = {**request.ground_truth, **verified}
+        
+        # 3. 프론트엔드에 응답 전송 (models.py의 규격에 맞춤)
+        return MergeResponse(
+            verified_data=verified,
+            rejected_data=ai_result.get("rejected_data", []),
+            reasoning=ai_result.get("reasoning", "분석 완료"),
+            updated_ground_truth=final_ground_truth
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
