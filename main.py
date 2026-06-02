@@ -11,8 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from fastapi.middleware.cors import CORSMiddleware
-from models import MergeRequest, MergeResponse
-from ai_service import run_validation_and_merge
+from models import MergeRequest, MergeResponse, ExtractBatchRequest, ExtractBatchResponse
+from ai_service import run_validation_and_merge, run_batch_text_extraction 
 
 from prompts import (
     build_filter_prompt,
@@ -26,7 +26,14 @@ from prompts import (
 
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="정보 추출 및 병합 API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 MAX_ITERATIONS = 6
@@ -294,6 +301,20 @@ async def run_pipeline(user_input: dict) -> AsyncGenerator[str, None]:
 
 
 # ── 엔드포인트 ────────────────────────────────────────────────────
+
+# --- [NEW] JSON 배열 정보 추출 API ---
+@app.post("/api/extract_batch", response_model=ExtractBatchResponse)
+async def api_extract_batch(request: ExtractBatchRequest):
+    try:
+        # Pydantic 모델 리스트를 일반 파이썬 딕셔너리 리스트로 변환
+        items_dict = [item.dict() for item in request.items]
+        
+        # ai_service 호출
+        extracted_list = run_batch_text_extraction(items_dict)
+        
+        return ExtractBatchResponse(extracted_items=extracted_list)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
