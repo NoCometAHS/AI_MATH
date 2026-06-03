@@ -19,36 +19,44 @@ def _get_llm() -> ChatGoogleGenerativeAI:
         temperature=0, 
         google_api_key=api_key
     )
-# --- [NEW] JSON 배열 기반 텍스트 추출 함수 ---
-def run_batch_text_extraction(items: list) -> list:
+# --- [수정됨] 자동 라벨링 및 열 기반(Columnar) 추출 함수 ---
+def run_batch_text_extraction(items: list) -> dict:
     llm = _get_llm()
     
+    # 텍스트가 몇 개인지 명시적으로 알려주면 AI가 배열 길이를 맞추는 데 도움이 됩니다.
+    item_count = len(items)
+    
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """당신은 뛰어난 텍스트 데이터 추출기입니다.
-        사용자가 제공하는 [원본 데이터 JSON 배열]을 분석하여, 각 항목에 대해 핵심 정보를 추출하고 동일한 순서의 JSON 배열(List)로 반환하십시오.
+        ("system", """당신은 뛰어난 데이터 추출 및 구조화 전문가입니다.
+        사용자가 제공하는 [원본 데이터 JSON 배열]을 분석하여, 텍스트에서 추출할 수 있는 모든 의미 있는 정보의 '키(Key)'를 스스로 정의(자동 라벨링)하십시오.
         
-        각 항목에서 추출할 키(Key):
-        - "date": 텍스트의 시점 (기준 날짜 참고하여 MM-DD 변환)
-        - "location": 장소, 가게 이름 등
-        - "companion": 동행인
-        - "action": 행동 요약
+        출력 형식은 개별 객체의 배열이 아니라, **모든 데이터를 통합한 단일 JSON 객체(Columnar format)**여야 합니다.
         
         규칙:
-        1. 텍스트에 해당 정보가 없으면 키를 생략하지 말고 값에 null을 넣으십시오. (데이터 구조 통일)
-        2. 원본 배열의 항목 개수와 출력 배열의 항목 개수가 정확히 일치해야 합니다.
-        3. 반드시 마크다운 기호(```json) 없이 순수한 JSON 배열(List) 객체만 반환하십시오.
-        """),
-        ("user", "[원본 데이터 JSON 배열]:\n{batch_data}")
+        1. [자동 라벨링]: 미리 정해진 키는 없습니다. 텍스트들을 종합적으로 분석하여 적절한 분류 기준(키)을 영어 단어로 자유롭게 생성하십시오. (예: date, location, weather, emotion, food_type 등)
+        2. [배열 길이 일치]: 모든 키의 값은 '배열(List)'이어야 하며, 이 배열의 길이는 반드시 입력된 원본 텍스트의 개수와 동일해야 합니다.
+        3. [인덱스 매칭]: 특정 배열의 n번째 요소는 원본 데이터의 n번째 텍스트에서 추출한 값이어야 합니다.
+        4. [결측치 처리]: 특정 텍스트에 해당 키에 대한 정보가 전혀 없다면, 반드시 그 위치(인덱스)에 `null`을 입력하여 배열의 길이를 유지하십시오.
+        5. 반드시 마크다운 기호(```json) 없이 순수한 JSON 객체만 반환하십시오.
+        
+        출력 구조 예시 (입력 데이터가 2개일 경우 모든 배열의 길이는 2):
+        {{
+          "date": ["2026-05-05", "2026-05-20"],
+          "location": ["상도동", "숭실대"],
+          "companion": [2, null],
+          "action": ["식사", "공부"],
+          "new_dynamic_key": ["값1", null]
+        }}"""),
+        ("user", "[원본 데이터 JSON 배열 (총 {count}개)]:\n{batch_data}")
     ])
     
     chain = prompt | llm
     
-    # 딕셔너리 리스트를 JSON 문자열로 변환하여 프롬프트에 삽입
     response = chain.invoke({
+        "count": item_count,
         "batch_data": json.dumps(items, ensure_ascii=False)
     })
     
-    # JSON 파싱 정제
     raw_content = response.content.strip()
     if raw_content.startswith("```json"):
         raw_content = raw_content[7:]
@@ -59,7 +67,7 @@ def run_batch_text_extraction(items: list) -> list:
         return json.loads(raw_content.strip())
     except json.JSONDecodeError:
         print("파싱 에러 발생 원문:", raw_content)
-        return []
+        return {} # 실패 시 빈 딕셔너리 반환
 
 def run_validation_and_merge(ground_truth: dict, inferred_data: dict) -> dict:
     # 1. Gemini 모델 호출 (gemini-1.5-flash 모델이 가성비와 속도면에서 가장 추천됩니다)

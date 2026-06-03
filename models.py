@@ -10,9 +10,9 @@ class RawTextItem(BaseModel):
 class ExtractBatchRequest(BaseModel):
     items: List[RawTextItem]
 
-# 서버에서 웹으로 돌려줄 결과 배열 구조
+# --- [수정됨] 단일 딕셔너리 안에 배열들이 들어가는 구조 ---
 class ExtractBatchResponse(BaseModel):
-    extracted_items: List[Dict[str, Any]]
+    extracted_data: Dict[str, List[Any]]
 
 # --- 기존 데이터 병합용 모델 (유지) ---
 class MergeRequest(BaseModel):
