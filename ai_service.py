@@ -1,18 +1,27 @@
+import os
 import json
+from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-# 발급받은 Gemini API 키를 여기에 입력하세요.
-# (실제 서비스 배포 시에는 보안을 위해 .env 파일로 숨기는 것이 좋습니다.)
-GEMINI_API_KEY = ""
+# .env 파일의 내용을 환경변수로 불러옵니다.
+load_dotenv()
 
-# --- [NEW] JSON 배열 기반 텍스트 추출 함수 ---
-def run_batch_text_extraction(items: list) -> list:
-    llm = ChatGoogleGenerativeAI(
+# --- [NEW] 모델 초기화 및 API 키 검증을 위한 내부 함수 ---
+def _get_llm() -> ChatGoogleGenerativeAI:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다. .env 파일을 확인해주세요.")
+    
+    # 공통으로 사용할 Gemini 모델 객체를 생성하여 반환합니다.
+    return ChatGoogleGenerativeAI(
         model="gemini-1.5-flash", 
         temperature=0, 
-        google_api_key=GEMINI_API_KEY
+        google_api_key=api_key
     )
+# --- [NEW] JSON 배열 기반 텍스트 추출 함수 ---
+def run_batch_text_extraction(items: list) -> list:
+    llm = _get_llm()
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", """당신은 뛰어난 텍스트 데이터 추출기입니다.
