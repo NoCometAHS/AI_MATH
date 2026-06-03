@@ -87,7 +87,8 @@ def run_validation_and_merge(ground_truth: dict, inferred_data: dict) -> dict:
         규칙:
         1. [추론 데이터]의 각 항목이 [정답 데이터]의 맥락과 모순 없이 일치하는지 논리적으로 확인하세요.
         2. 정답 데이터의 맥락상 사실일 확률이 매우 높은 추론 데이터만 "verified_data"에 추가하세요.
-        3. 정답 데이터와 모순되거나, 확인할 수 없는(과도한 추측인) 데이터는 "rejected_data"에 키값을 추가하세요.
+        3. 정답 데이터와 모순되는 데이터는 "rejected_data"에 키값을 추가하세요.
+        4. 정답 데이터에서 확인할 수 없는 새로운 데이터는 "verified_data"에 추가하세요.
         
         출력은 반드시 마크다운 기호(```json) 없이 순수한 JSON 객체로만 작성해야 합니다.
         형식:
