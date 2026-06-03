@@ -1,92 +1,104 @@
+import os
+import sys
+import json
+import subprocess
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-
-# 1. models.py에서 정의한 데이터 규격 가져오기
-from models import (
-    MergeRequest, 
-    MergeResponse, 
-    ExtractBatchRequest, 
-    ExtractBatchResponse
-)
-
-# 2. ai_service.py에서 정의한 AI 동작 함수 가져오기
+from models import ProfileRequest, ProfileResponse
 from ai_service import (
-    run_validation_and_merge, 
     run_batch_text_extraction,
+    run_validation_and_merge,
     run_profile_summarization
 )
 
-# FastAPI 앱 초기화
-app = FastAPI(title="OSINT 데이터 파이프라인 API", description="정보 추출 및 정답 데이터 교차 검증 서버")
+app = FastAPI(title="OSINT 통합 프로파일링 API")
 
-# 웹페이지(프론트엔드)에서 API를 호출할 수 있도록 CORS 허용 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # 실제 배포 시에는 프론트엔드 도메인(예: http://localhost:3000)만 허용하는 것이 안전합니다.
+    allow_origins=["*"], 
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ==========================================
-# [API 1] 텍스트 정보 일괄 추출 (Columnar 방식)
-# ==========================================
-@app.post("/api/extract_batch")
-async def api_extract_batch(request: ExtractBatchRequest):
+def extract_texts_from_social_data(data, min_length=5):
+    """JSON 구조를 순회하며 텍스트 데이터만 추출하는 헬퍼 함수"""
+    texts = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k.lower() in ['url', 'id', 'timestamp', 'video_url', 'profile_pic']:
+                continue
+            texts.extend(extract_texts_from_social_data(v, min_length))
+    elif isinstance(data, list):
+        for item in data:
+            texts.extend(extract_texts_from_social_data(item, min_length))
+    elif isinstance(data, str) and len(data) >= min_length:
+        texts.append(data)
+    return texts
+
+@app.post("/api/generate_profile", response_model=ProfileResponse)
+async def api_generate_profile(request: ProfileRequest):
+    target_id = request.target_id
+    
+    # 1. 크롤러 실행 (subprocess)
     try:
-        items_dict = [item.model_dump() for item in request.items]
+        print(f"[{target_id}] 크롤링을 위해 새 창을 띄웁니다...")
         
-        # 1단계: 날것의 문장들에서 표(Columnar) 형태로 데이터 일괄 추출
-        extracted_dict = run_batch_text_extraction(items_dict)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+
+        process = subprocess.run(
+            [sys.executable, "run_all.py", target_id],
+            cwd=current_dir,
+            **kwargs
+        )
         
-        # 2단계: 추출된 데이터를 다시 Gemini에 넣어서 인물 프로필로 재요약 (💥 추가된 부분)
-        profile_summary = run_profile_summarization(extracted_dict)
-        
-        # 웹페이지로 두 가지 결과를 모두 돌려줍니다. 
-        # 화면에 표 형태도 보여주고, 최종 요약본도 보여줄 수 있어서 시각적으로 매우 훌륭해집니다.
-        return {
-            "raw_table_data": extracted_dict,     # 1차 결과 (표 형태)
-            "final_profile": profile_summary      # 2차 결과 (인물 중심 프로필)
-        }
+        if process.returncode != 0:
+            raise Exception("크롤러 실행 중 내부 오류가 발생했습니다.")
+            
+        print(f"[{target_id}] 크롤링 완료. AI 분석을 시작합니다.")
         
     except Exception as e:
-        print(f"추출/요약 파이프라인 에러: {str(e)}")
-        raise HTTPException(status_code=500, detail="데이터 추출 및 프로필 요약 중 오류가 발생했습니다.")
+        raise HTTPException(status_code=500, detail=str(e))
 
+    # 2. 통합 결과 파일(merged.json) 로드
+    merged_file_path = "output/merged.json"
+    if not os.path.exists(merged_file_path):
+        raise HTTPException(status_code=404, detail="수집된 데이터(merged.json)가 생성되지 않았습니다.")
 
-# ==========================================
-# [API 2] 정답 데이터와 추론 데이터 교차 검증 및 병합
-# ==========================================
-@app.post("/api/merge_data", response_model=MergeResponse)
-async def api_merge_data(request: MergeRequest):
     try:
-        # Gemini AI를 호출하여 데이터 논리 검증 수행
-        ai_result = run_validation_and_merge(
+        with open(merged_file_path, "r", encoding="utf-8") as f:
+            social_data = json.load(f)
+            
+        raw_texts = extract_texts_from_social_data(social_data)
+        texts_to_analyze = raw_texts[:50] # API 비용 및 속도를 위해 50개 컷
+        
+        if not texts_to_analyze:
+             raise HTTPException(status_code=400, detail="분석할 텍스트 데이터를 찾지 못했습니다.")
+
+        # 3. LLM 파이프라인 가동 및 결과 처리 부분
+        items_dict = [{"raw_text": t} for t in texts_to_analyze]
+        extracted_table = run_batch_text_extraction(items_dict)
+        
+        merge_result = run_validation_and_merge(
             ground_truth=request.ground_truth,
-            inferred_data=request.inferred_data
+            inferred_data=extracted_table
         )
         
-        # 승인된(Verified) 데이터만 추출
-        verified = ai_result.get("verified_data", {})
+        verified_data = merge_result.get("verified_data", {})
+        final_ground_truth = {**request.ground_truth, **verified_data}
+        rejected_keys = merge_result.get("rejected_data", []) # ai_service에서 받아온 리스트
         
-        # 기존 정답 데이터(Ground Truth)에 승인된 데이터를 덮어쓰기(병합)
-        # 딕셔너리 언패킹(**)을 사용하여 간단하게 합칩니다.
-        final_ground_truth = {**request.ground_truth, **verified}
+        final_profile = run_profile_summarization(final_ground_truth)
         
-        # 검증 결과 및 최종 병합본을 응답 규격에 맞춰 웹으로 반환
-        return MergeResponse(
-            verified_data=verified,
-            rejected_data=ai_result.get("rejected_data", []),
-            reasoning=ai_result.get("reasoning", "분석 완료"),
-            updated_ground_truth=final_ground_truth
+        # 💥 [확인 및 수정] ProfileResponse 규격과 완벽히 일치해야 합니다.
+        return ProfileResponse(
+            target_id=target_id,
+            analyzed_post_count=len(texts_to_analyze),
+            final_profile=final_profile,
+            rejected_data_keys=rejected_keys  # 👈 이 필드명이 명확해야 합니다.
         )
         
     except Exception as e:
-        print(f"병합 API 에러: {str(e)}")
-        raise HTTPException(status_code=500, detail="데이터 교차 검증 및 병합 중 오류가 발생했습니다.")
-
-# ==========================================
-# [헬스 체크] 서버가 정상적으로 켜져 있는지 확인하는 용도
-# ==========================================
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "서버가 정상적으로 실행 중입니다."}
+        raise HTTPException(status_code=500, detail=f"AI 분석 중 오류가 발생했습니다: {str(e)}")

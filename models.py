@@ -25,6 +25,13 @@ class MergeResponse(BaseModel):
     reasoning: str
     updated_ground_truth: Dict[str, Any]
 
-# --- [NEW] 최종 프로필 요약 응답 규격 추가 ---
-class ProfileSummaryResponse(BaseModel):
-    profile_data: Dict[str, Any]  # 인물 중심으로 유연하게 요약된 프로필 JSON
+# --- [NEW] 웹앱 통합 프로파일링용 모델 ---
+class ProfileRequest(BaseModel):
+    target_id: str
+    ground_truth: Dict[str, Any] = {} # 초기 정답 데이터 (예: 지역, 나이 등)
+
+class ProfileResponse(BaseModel):
+    target_id: str
+    analyzed_post_count: int
+    final_profile: Dict[str, Any]
+    rejected_data_keys: List[str] # 기각된 데이터 목록
