@@ -24,3 +24,7 @@ class MergeResponse(BaseModel):
     rejected_data: List[str]
     reasoning: str
     updated_ground_truth: Dict[str, Any]
+
+# --- [NEW] 최종 프로필 요약 응답 규격 추가 ---
+class ProfileSummaryResponse(BaseModel):
+    profile_data: Dict[str, Any]  # 인물 중심으로 유연하게 요약된 프로필 JSON

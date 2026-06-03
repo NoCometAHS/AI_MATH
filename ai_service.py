@@ -7,18 +7,23 @@ from langchain_core.prompts import ChatPromptTemplate
 # .env 파일의 내용을 환경변수로 불러옵니다.
 load_dotenv()
 
-# --- [NEW] 모델 초기화 및 API 키 검증을 위한 내부 함수 ---
+# ai_service.py 파일의 상단 _get_llm 함수를 아래와 같이 똑같이 맞춰주세요.
+
+# ai_service.py 파일의 _get_llm 함수를 아래 코드로 교체합니다.
+
 def _get_llm() -> ChatGoogleGenerativeAI:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다. .env 파일을 확인해주세요.")
+        raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
     
-    # 공통으로 사용할 Gemini 모델 객체를 생성하여 반환합니다.
+    # 💥 모델명을 공식 표준 명칭인 "gemini-1.5-flash"로 설정합니다.
+    # 뒤에 붙은 -latest가 오히려 API 버전 매핑을 방해하는 원인이었습니다.
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", 
+        model="gemini-2.5-flash", 
         temperature=0, 
         google_api_key=api_key
     )
+
 # --- [수정됨] 자동 라벨링 및 열 기반(Columnar) 추출 함수 ---
 def run_batch_text_extraction(items: list) -> dict:
     llm = _get_llm()
@@ -70,12 +75,9 @@ def run_batch_text_extraction(items: list) -> dict:
         return {} # 실패 시 빈 딕셔너리 반환
 
 def run_validation_and_merge(ground_truth: dict, inferred_data: dict) -> dict:
-    # 1. Gemini 모델 호출 (gemini-1.5-flash 모델이 가성비와 속도면에서 가장 추천됩니다)
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
-        temperature=0, 
-        google_api_key=GEMINI_API_KEY
-    )
+    # 💥 기존의 ChatGoogleGenerativeAI(...) 부분을 걷어내고, 
+    # 아래 한 줄로 변경하여 상단의 팩토리 함수를 호출합니다.
+    llm = _get_llm()
     
     # 2. 프롬프트 구성 (Gemini 맞춤형 한국어 프롬프트)
     prompt = ChatPromptTemplate.from_messages([
@@ -112,3 +114,50 @@ def run_validation_and_merge(ground_truth: dict, inferred_data: dict) -> dict:
         return json.loads(raw_content.strip())
     except json.JSONDecodeError:
         return {"verified_data": {}, "rejected_data": ["전체 파싱 실패"], "reasoning": "모델 출력 오류"}
+    
+# --- [NEW] 추출된 Columnar 데이터를 인물 프로필로 2차 요약하는 함수 ---
+def run_profile_summarization(extracted_data: dict) -> dict:
+    llm = _get_llm()
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """당신은 수집된 행동 로그 데이터를 기반으로 특정 개인의 핵심 신상 프로필을 작성하는 프로파일링 전문가입니다.
+        제공되는 [추출된 데이터 세트]는 한 인물의 여러 게시물에서 뽑아낸 정보들입니다.
+        
+        이 데이터들을 종합적으로 분석하여 이 인물의 고정적인 신상 정보, 가족 관계, 자주 방문하는 곳, 관심사 등을 인물 중심으로 유연하게 요약하여 하나의 JSON 객체로 만드십시오.
+        
+        규칙:
+        1. [유연한 라벨링]: 미리 정해진 키는 없습니다. 데이터에서 유추할 수 있는 핵심 신상 키를 생성하십시오. 
+           (예: school, family, often_visit, hobby, fitness_status 등)
+        2. 값(Value)은 배열이 아니라 하나의 대표적인 문자열이나 구체적인 데이터여야 합니다. 
+        3. 확실하지 않거나 유추할 수 없는 항목은 제외하십시오.
+        4. 반드시 마크다운 기호(```json) 없이 순수한 JSON 객체만 반환하십시오.
+        
+        출력 예시:
+        {{
+          "school": "상도고등학교",
+          "family": "언니",
+          "often_visit": "스터디카페, 보라매공원",
+          "hobby": "농구",
+          "recent_status": "발목 부상 및 중간고사 준비 중"
+        }}"""),
+        ("user", "[추출된 데이터 세트]:\n{data}")
+    ])
+    
+    chain = prompt | llm
+    
+    response = chain.invoke({
+        "data": json.dumps(extracted_data, ensure_ascii=False)
+    })
+    
+    # JSON 파싱 정제
+    raw_content = response.content.strip()
+    if raw_content.startswith("```json"):
+        raw_content = raw_content[7:]
+    if raw_content.endswith("```"):
+        raw_content = raw_content[:-3]
+        
+    try:
+        return json.loads(raw_content.strip())
+    except json.JSONDecodeError:
+        print("프로필 요약 파싱 에러:", raw_content)
+        return {}
