@@ -7,17 +7,25 @@ from langchain_core.prompts import ChatPromptTemplate
 # .env 파일의 내용을 환경변수로 불러옵니다.
 load_dotenv()
 
-# ai_service.py 파일의 상단 _get_llm 함수를 아래와 같이 똑같이 맞춰주세요.
-
-# ai_service.py 파일의 _get_llm 함수를 아래 코드로 교체합니다.
-
+# --- [NEW] 모델 초기화 및 API 키 검증을 위한 내부 함수 ---
 def _get_llm() -> ChatGoogleGenerativeAI:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
+        raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다. .env 파일을 확인해주세요.")
     
-    # 💥 모델명을 공식 표준 명칭인 "gemini-1.5-flash"로 설정합니다.
-    # 뒤에 붙은 -latest가 오히려 API 버전 매핑을 방해하는 원인이었습니다.
+    # 공통으로 사용할 Gemini 모델 객체를 생성하여 반환합니다.
+    return ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash", 
+        temperature=0, 
+        google_api_key=api_key
+    )
+
+def _get_llm2() -> ChatGoogleGenerativeAI:
+    api_key = os.getenv("GEMINI_API_KEY2")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY2 환경변수가 설정되지 않았습니다. .env 파일을 확인해주세요.")
+    
+    # 공통으로 사용할 Gemini 모델 객체를 생성하여 반환합니다.
     return ChatGoogleGenerativeAI(
         model="gemini-2.5-flash", 
         temperature=0, 
@@ -38,11 +46,12 @@ def run_batch_text_extraction(items: list) -> dict:
         출력 형식은 개별 객체의 배열이 아니라, **모든 데이터를 통합한 단일 JSON 객체(Columnar format)**여야 합니다.
         
         규칙:
-        1. [자동 라벨링]: 미리 정해진 키는 없습니다. 텍스트들을 종합적으로 분석하여 적절한 분류 기준(키)을 영어 단어로 자유롭게 생성하십시오. (예: date, location, weather, emotion, food_type 등)
-        2. [배열 길이 일치]: 모든 키의 값은 '배열(List)'이어야 하며, 이 배열의 길이는 반드시 입력된 원본 텍스트의 개수와 동일해야 합니다.
-        3. [인덱스 매칭]: 특정 배열의 n번째 요소는 원본 데이터의 n번째 텍스트에서 추출한 값이어야 합니다.
-        4. [결측치 처리]: 특정 텍스트에 해당 키에 대한 정보가 전혀 없다면, 반드시 그 위치(인덱스)에 `null`을 입력하여 배열의 길이를 유지하십시오.
-        5. 반드시 마크다운 기호(```json) 없이 순수한 JSON 객체만 반환하십시오.
+        1. [텍스트 보존]: 가장 먼저, 제목이나 캡션과 상관 없는 텍스트 정보(이미지 url, 영상 url, 이미지에 대한 메타데이터 등)를 삭제하여 업로드 날짜, 제목, 캡션만 남기십시오.
+        2. [자동 라벨링]: 미리 정해진 키는 없습니다. 텍스트들을 종합적으로 분석하여 적절한 분류 기준(키)을 영어 단어로 자유롭게 생성하십시오. (예: date, location, weather, emotion, food_type 등)
+        3. [배열 길이 일치]: 모든 키의 값은 '배열(List)'이어야 하며, 이 배열의 길이는 반드시 입력된 원본 텍스트의 개수와 동일해야 합니다.
+        4. [인덱스 매칭]: 특정 배열의 n번째 요소는 원본 데이터의 n번째 텍스트에서 추출한 값이어야 합니다.
+        5. [결측치 처리]: 특정 텍스트에 해당 키에 대한 정보가 전혀 없다면, 반드시 그 위치(인덱스)에 `null`을 입력하여 배열의 길이를 유지하십시오.
+        6. 반드시 마크다운 기호(```json) 없이 순수한 JSON 객체만 반환하십시오.
         
         출력 구조 예시 (입력 데이터가 2개일 경우 모든 배열의 길이는 2):
         {{
@@ -75,9 +84,8 @@ def run_batch_text_extraction(items: list) -> dict:
         return {} # 실패 시 빈 딕셔너리 반환
 
 def run_validation_and_merge(ground_truth: dict, inferred_data: dict) -> dict:
-    # 💥 기존의 ChatGoogleGenerativeAI(...) 부분을 걷어내고, 
-    # 아래 한 줄로 변경하여 상단의 팩토리 함수를 호출합니다.
-    llm = _get_llm()
+    # 1. Gemini 모델 호출 (gemini-1.5-flash 모델이 가성비와 속도면에서 가장 추천됩니다)
+    llm = _get_llm2()
     
     # 2. 프롬프트 구성 (Gemini 맞춤형 한국어 프롬프트)
     prompt = ChatPromptTemplate.from_messages([
@@ -118,7 +126,7 @@ def run_validation_and_merge(ground_truth: dict, inferred_data: dict) -> dict:
     
 # --- [NEW] 추출된 Columnar 데이터를 인물 프로필로 2차 요약하는 함수 ---
 def run_profile_summarization(extracted_data: dict) -> dict:
-    llm = _get_llm()
+    llm = _get_llm2()
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", """당신은 수집된 행동 로그 데이터를 기반으로 특정 개인의 핵심 신상 프로필을 작성하는 프로파일링 전문가입니다.
